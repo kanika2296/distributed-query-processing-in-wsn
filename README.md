@@ -1,1 +1,1 @@
-# distributed-query-processing-in-wsn
+# Distributed query processing in wsn
