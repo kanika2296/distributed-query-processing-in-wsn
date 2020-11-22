@@ -1,0 +1,18 @@
+function [info] = InsertToDB_global(conn, id, data_time, k)
+query_create = "CREATE TABLE IF NOT EXISTS SensorData_global"+id+" (id INT(6) UNSIGNED AUTO_INCREMENT PRIMARY KEY,time_stamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP";
+for i = 1: length(Vars)
+    query_create = query_create + ","+Vars(i)+" float NOT NULL";
+end
+
+curs = exec(conn,query_create+")");
+query_insert = "Insert into Sensordata_global"+id+ " values ('"+string(data_time)+"', ";
+for i = 1: len(k)
+    if i~=len(k)
+        query_insert = query_insert + k(i)+", ";
+    else
+        query_insert = query_insert + k(i)+")";
+    end
+end
+curs = exec(conn,query_insert);
+curs = fetch(curs);
+info = curs.Data;

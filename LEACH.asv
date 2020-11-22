@@ -1,0 +1,359 @@
+function [o]= LEACH(conn)
+
+%{
+clc;
+clear;
+close all;
+warning off all;
+tic;
+%}
+
+
+
+
+
+%% Create sensor nodes, Set Parameters and Create Energy Model 
+%%%%%%%%%%%%%%%%%%%%%%%%% Initial Parameters %%%%%%%%%%%%%%%%%%%%%%%
+n=40;                                  %Number of Nodes in the field
+[Area,Model]=setParameters(n);     		%Set Parameters Sensors and Network
+
+%%%%%%%%%%%%%%%%%%%%%%%%% configuration Sensors %%%%%%%%%%%%%%%%%%%%
+CreateRandomSen(Model,Area);            %Create a random scenario
+load Locations                          %Load sensor Location
+Sensors=ConfigureSensors(Model,n,X,Y,Z);
+figure
+ploter(Sensors,Model);                  %Plot sensors
+
+%%%%%%%%%%%%%%%%%%%%%%%%%% Parameters initialization %%%%%%%%%%%%%%%%
+countCHs=0;         %counter for CHs
+flag_first_dead=0;  %flag_first_dead
+deadNum=0;          %Number of dead nodes
+
+initEnergy=0;       %Initial Energy
+for i=1:n+6
+      initEnergy=Sensors(i).E+initEnergy;
+end
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%% Start Simulation %%%%%%%%%%%%%%%%%%%%%%%%%
+global srp rrp sdp rdp
+srp=0;          %counter number of sent routing packets
+rrp=0;          %counter number of receive routing packets
+sdp=0;          %counter number of sent data packets 
+rdp=0;          %counter number of receive data packets 
+
+
+
+%Sink broadcast start message to all nodes
+
+Sender=[n+7];     %root send to level 1 (5, 6) and (5, 6) send to ((1, 2) and (3,4)) 
+Receiver=[n+5 n+6];   %All nodes
+Sensors=SendReceivePackets(conn, Sensors,Model,Sender,'Hello',Receiver);
+disp("sent to all level 2 nodes .......................................")
+Sender=[n+1 n+2 n+3 n+4];     %Sink
+Receiver=1:n;   %All nodes
+Sensors=SendReceivePackets(conn, Sensors,Model,Sender,'Hello',Receiver);
+disp("sent to all sensor nodes .......................................")
+
+% All sensor send location information to Sink .
+ Sensors=disToSink(Sensors,Model);
+
+%Save metrics
+SRP(1)=srp;
+RRP(1)=rrp;  
+SDP(1)=sdp;
+RDP(1)=rdp;
+
+pause(7);
+
+%% query injection
+Model.QueryStarted = true;
+Model.QueryStartTime = datestr(now, 'yyyy-mm-dd HH:MM:SS');
+Model.QueryEndTime = datestr(now+minutes(3), 'yyyy-mm-dd HH:MM:SS');
+Model.QueryDelta = datestr(seconds(30));
+Model.rmax = 2;
+%%
+
+
+SRP=zeros(1,Model.rmax);    %number of sent routing packets
+RRP=zeros(1,Model.rmax);    %number of receive routing packets
+SDP=zeros(1,Model.rmax);    %number of sent data packets 
+RDP=zeros(1,Model.rmax);    %number of receive data packets 
+
+Sum_DEAD=zeros(1,Model.rmax);
+CLUSTERHS=zeros(1,Model.rmax);
+AllSensorEnergy=zeros(1,Model.rmax);
+
+disp("Got a query!");
+%send query to sensors
+Sender=[n+7];     %root send to level 1 (5, 6) and (5, 6) send to ((1, 2) and (3,4)) 
+Receiver=[n+5 n+6];   %All nodes
+Sensors=SendReceivePackets(conn, Sensors,Model,Sender,'Query',Receiver);
+Sender=[n+5];
+Receiver=[n+1 n+2];   %All nodes
+Sensors=SendReceivePackets(conn, Sensors,Model,Sender,'Query',Receiver);
+Sender=[n+6];
+Receiver=[n+3 n+4];   %All nodes
+Sensors=SendReceivePackets(conn, Sensors,Model,Sender,'Query',Receiver);
+disp("QUERY sent to all level 2 nodes .......................................");
+Sender=[n+1 n+2 n+3 n+4];     %Sink
+Receiver=1:n;   %All nodes
+Sensors=SendReceivePackets(conn, Sensors,Model,Sender,'Query',Receiver);
+disp("QUERY sent to all sensor nodes .......................................");
+
+
+
+
+%% Main loop program
+
+for r=1:Model.rmax  
+    
+    
+    
+%%%%%%%%%%%%%%%%%%%%%%%%%%%% Initialization %%%%%%%%%%%%%%%%%%%%%
+    %This section Operate for each epoch   
+    member=[];              %Member of each cluster in per period
+    countCHs=0;             %Number of CH in per period
+    %counter for bit transmitted to Bases Station and Cluster Heads
+    srp=0;          %counter number of sent routing packets
+    rrp=0;          %counter number of receive routing packets
+    sdp=0;          %counter number of sent data packets to sink
+    rdp=0;          %counter number of receive data packets by sink
+    %initialization per round
+    SRP(r+1)=srp;
+    RRP(r+1)=rrp;  
+    SDP(r+1)=sdp;
+    RDP(r+1)=rdp;   
+    pause(0.001)    %pause simulation
+    hold off;       %clear figure
+    
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    Sensors=resetSensors(Sensors,Model);
+    %allow to sensor to become cluster-head. LEACH Algorithm  
+    AroundClear=10;
+    if(mod(r,AroundClear)==0) 
+        for i=1:1:n
+            Sensors(i).G=0;
+        end
+    end
+    
+%%%%%%%%%%%%%%%%%%%%%%%%%%%% plot sensors %%%%%%%%%%%%%%%%%%%%%%%
+    deadNum=ploter(Sensors,Model);
+    
+    %Save r'th period When the first node dies
+    if (deadNum>=1)      
+        if(flag_first_dead==0)
+            first_dead=r;
+            flag_first_dead=1;
+        end  
+    end
+    
+%%%%%%%%%%%%%%%%%%%%%%% cluster head election %%%%%%%%%%%%%%%%%%%
+    %Selection Candidate Cluster Head Based on LEACH Set-up Phase
+    [TotalCH,Sensors]=SelectCH(Sensors,Model,1); 
+
+    %Broadcasting CHs to All Sensor that are in Radio Rage CH.
+    for i=1:length(TotalCH)
+        
+        Sender=TotalCH(i).id;
+        SenderRR=Model.RR;
+        Receiver=findReceiver(Sensors,Model,Sender,SenderRR);   
+        %fprintf("HELLO sender - %d , Receiver - %d\n", Sender, Receiver);
+        Sensors=SendReceivePackets(conn, Sensors,Model,Sender,'Hello',Receiver);
+          
+    end 
+    %fprintf("''''''''''''''''''''''''''''''''''''''''''''''' %d", length(TotalCH));
+    %Sensors join to nearest CH 
+    Sensors=JoinToNearestCH(Sensors,Model,TotalCH);
+    %{
+    for i=1:length(Sensors)
+            fprintf("sensor - %d , CH - %d\n", i, Sensors(i).MCH);
+        end
+    %}
+%%%%%%%%%%%%%%%%%%%%%%% end of cluster head election phase %%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%% plot network status in end of set-up phase 
+
+    for i=1:n+7
+        
+        if (Sensors(i).id <= Model.n && Sensors(i).type=='N' && Sensors(i).dis2ch<Sensors(i).dis2sink && ...
+                Sensors(i).E>0)
+            
+            XL=[Sensors(i).xd ,Sensors(Sensors(i).MCH).xd];
+            YL=[Sensors(i).yd ,Sensors(Sensors(i).MCH).yd];
+            ZL=[Sensors(i).zd ,Sensors(Sensors(i).MCH).zd]; 
+            
+        else
+            if Sensors(i).id <= Model.n
+                if(i<n/4)
+                    k=Sensors(n+1).id;                       %Sink
+                else
+                    if(i>=n/4 && i<2*n/4)
+                        k=Sensors(n+2).id;                   %Sink
+                    else
+                        if(i>=2*n/4 && i<3*n/4)
+                            k=Sensors(n+3).id;               %Sink
+                        else
+                            k=Sensors(n+4).id;               %Sink
+                        end
+
+                    end
+                end
+                XL=[Sensors(i).xd ,Sensors(k).xd];
+                YL=[Sensors(i).yd ,Sensors(k).yd];
+                ZL=[Sensors(i).zd ,Sensors(k).zd];
+            else
+                XL=[Sensors(i).xd ,Sensors(Sensors(i).MCH).xd];
+                YL=[Sensors(i).yd ,Sensors(Sensors(i).MCH).yd];
+                ZL=[Sensors(i).zd ,Sensors(Sensors(i).MCH).zd];
+            end
+        end
+        hold on
+        plot3(XL,YL,ZL)
+        
+    end
+    
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% steady-state phase %%%%%%%%%%%%%%%%%
+    NumPacket=Model.NumPacket;
+    for i=1:1:1%NumPacket 
+        
+        %Plotter     
+        deadNum=ploter(Sensors,Model);
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% All sensor send data packet to CH 
+        for j=1:length(TotalCH)
+            Receiver=TotalCH(j).id;
+            %disp("Receiver calculated in leach function");
+            %Receiver
+            Sender=findSender(Sensors,Model,Receiver); 
+            %disp("Sender calculated in leach function");
+            %Sender
+            Sensors=SendReceivePackets(conn, Sensors,Model,Sender,'Data',Receiver);
+            
+        end
+        
+    end
+    
+    
+%%%%%%%%%%%% send Data packet from CH to Sink after Data aggregation
+    CHlen = length(TotalCH);
+    for i=1:CHlen
+        Sender=TotalCH(i).id;       %CH 
+        if(Sender<n/4)
+            Receiver=Sensors(n+1).id;                       %Sink
+        else
+            if(Sender>=n/4 && Sender<2*n/4)
+                Receiver=Sensors(n+2).id;                   %Sink
+            else
+                if(Sender>=2*n/4 && Sender<3*n/4)
+                    Receiver=Sensors(n+3).id;               %Sink
+                else
+                    Receiver=Sensors(n+4).id;               %Sink
+                end
+            end
+        end
+        Sensors=SendReceivePackets(conn, Sensors,Model,Sender,'Data',Receiver);
+            
+    end
+    disp("sent data from CH to sink ********************************************");
+%%% send data packet directly from other nodes(that aren't in each cluster) to Sink
+    for i=1:n
+        for j = 1:4
+            %fprintf('j : %i ', j);
+            if(Sensors(i).MCH==Sensors(n+j).id)
+                %fprintf('j value : %i ', j);
+                Receiver=n+j;               %Sink
+                Sender=Sensors(i).id;       %Other Nodes 
+                Sensors=SendReceivePackets(conn, Sensors,Model,Sender,'Data',Receiver);
+            end
+        end
+        
+    end
+ disp("sent data from node to sink ********************************************");
+
+%%%%%%%%%%%% send Data packet from level 2 Sinks to level 1 Sink after Data aggregation
+    for i=1:4
+        Sender=n+i;       %level 2 sink 
+        Sensors=SendReceivePackets(conn, Sensors,Model,Sender,'Data',Sensors(Sender).MCH);    
+    end
+    disp("sent data from level 2 sink  to level 1 sink //////////////////////////////////////////////////");
+%%%%%%%%%%%% send Data packet from level 1 Sinks to level root Sink after Data aggregation
+    for i=5:6
+        Sender=n+i;       %level 1 sink
+        Sensors=SendReceivePackets(conn, Sensors,Model,Sender,'Data',Sensors(Sender).MCH);    
+    end
+ disp("sent data from level 2 sink  to root sink //////////////////////////////////////////////////");
+%% STATISTICS
+     
+    Sum_DEAD(r+1)=deadNum;
+    
+    SRP(r+1)=srp;
+    RRP(r+1)=rrp;  
+    SDP(r+1)=sdp;
+    RDP(r+1)=rdp;
+    
+    CLUSTERHS(r+1)=countCHs;
+    
+    alive=0;
+    SensorEnergy=0;
+    for i=1:n+6
+        if Sensors(i).E>0
+            alive=alive+1;
+            SensorEnergy=SensorEnergy+Sensors(i).E;
+        end
+    end
+    AliveSensors(r+1)=alive; %#ok
+    
+    SumEnergyAllSensor(r+1)=SensorEnergy; %#ok
+    
+    AvgEnergyAllSensor(r+1)=SensorEnergy/alive; %#ok
+    
+    ConsumEnergy(r+1)=(initEnergy-SumEnergyAllSensor(r+1))/n; %#ok
+    
+    En=0;
+    for i=1:n
+        if Sensors(i).E>0
+            En=En+(Sensors(i).E-AvgEnergyAllSensor(r+1))^2;
+        end
+    end
+    
+    Enheraf(r+1)=En/alive; %#ok
+    
+    
+    title(sprintf('Round=%d,Dead nodes=%d', r+1, deadNum)) 
+    
+   %dead
+   if(n==deadNum)
+       
+       lastPeriod=r;  
+       AliveSensors(r+1)=0;
+       break;
+       
+   end
+   
+   
+AliveSensors(1)=n+6;
+  
+end
+%% for r=0:1:rmax
+AliveSensors
+SumEnergyAllSensor
+AvgEnergyAllSensor
+ConsumEnergy
+SRP
+RRP
+SDP
+RDP
+Sum_DEAD
+CLUSTERHS
+AllSensorEnergy
+metrics = [AliveSensors; SumEnergyAllSensor ; AvgEnergyAllSensor ; ConsumEnergy ; SRP ; RRP; SDP; RDP; Sum_DEAD; CLUSTERHS; AllSensorEnergy];
+writematrix(metrics,'M2.csv') ;
+disp('End of Simulation');
+disp('Create Report...')
+disp('QUERY END ///////QUERY END//////////////QUERY END//////////////QUERY END//////////////////QUERY END/////////////QUERY END')
+filename=sprintf('leach%d.mat',n);
+
+%% Save Report
+save(filename);
+
+o = "done";
